@@ -2,10 +2,98 @@
 
 set -euo pipefail
 
-current_script_path=${BASH_SOURCE[0]}
-plugin_dir=$(dirname "$(dirname "$current_script_path")")
+GH_REPO="https://github.com/crowdin/crowdin-cli.git"
 
-# shellcheck source=./lib/utils.bash
-source "${plugin_dir}/lib/utils.bash"
+fail() {
+  echo "asdf-crowdin: $*" >&2
+  exit 1
+}
 
-install_version "$ASDF_INSTALL_TYPE" "$ASDF_INSTALL_VERSION" "$ASDF_INSTALL_PATH"
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
+
+checkout_version() {
+  local version="$1"
+
+  if git checkout "tags/v${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  if git checkout "v${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  if git checkout "tags/${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  if git checkout "${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+main() {
+  local install_type="${ASDF_INSTALL_TYPE:-version}"
+  local version="${ASDF_INSTALL_VERSION:?ASDF_INSTALL_VERSION is required}"
+  local install_path="${ASDF_INSTALL_PATH:?ASDF_INSTALL_PATH is required}"
+  local download_path="${ASDF_DOWNLOAD_PATH:?ASDF_DOWNLOAD_PATH is required}"
+  local src_dir="${download_path}/src"
+  local dist_dir
+
+  require_cmd git
+  require_cmd find
+  require_cmd chmod
+  require_cmd cp
+  require_cmd mkdir
+
+  if ! command -v java >/dev/null 2>&1; then
+    fail "java is required to build crowdin-cli"
+  fi
+
+  mkdir -p "$download_path"
+  rm -rf "$src_dir"
+
+  git clone --filter=blob:none "$GH_REPO" "$src_dir"
+
+  cd "$src_dir"
+  git fetch --tags --force
+
+  case "$install_type" in
+    version)
+      checkout_version "$version" \
+        || fail "unable to find git tag for version: $version"
+      ;;
+    ref)
+      git checkout "$version" || fail "unable to checkout ref: $version"
+      ;;
+    *)
+      fail "unsupported ASDF_INSTALL_TYPE: $install_type"
+      ;;
+  esac
+
+  chmod +x ./gradlew
+  ./gradlew --no-daemon installDist
+
+  dist_dir="$(find build/install -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  [ -n "${dist_dir:-}" ] || fail "could not find built distribution"
+
+  mkdir -p "$install_path"
+  cp -R "$dist_dir"/. "$install_path"/
+
+  if [ ! -d "$install_path/bin" ]; then
+    fail "installation completed, but no bin directory was created"
+  fi
+
+  if ! find "$install_path/bin" -maxdepth 1 -type f | grep -q .; then
+    fail "installation completed, but no executable was found in bin/"
+  fi
+
+  chmod +x "$install_path"/bin/*
+
+  echo "crowdin-cli ${version} installation was successful!"
+}
+
+main "$@"
