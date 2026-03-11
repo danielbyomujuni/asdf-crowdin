@@ -2,22 +2,69 @@
 
 set -euo pipefail
 
-current_script_path=${BASH_SOURCE[0]}
-plugin_dir=$(dirname "$(dirname "$current_script_path")")
+GIT_REPO="https://github.com/crowdin/crowdin-cli.git"
 
-# shellcheck source=./lib/utils.bash
-source "${plugin_dir}/lib/utils.bash"
+fail() {
+  echo "asdf-crowdin: $*" >&2
+  exit 1
+}
 
-mkdir -p "$ASDF_DOWNLOAD_PATH"
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
+}
 
-# TODO: Adapt this to proper extension and adapt extracting strategy.
-release_file="$ASDF_DOWNLOAD_PATH/$TOOL_NAME-$ASDF_INSTALL_VERSION.tar.gz"
+checkout_version() {
+  local version="$1"
 
-# Download tar.gz file to the download directory
-download_release "$ASDF_INSTALL_VERSION" "$release_file"
+  if git checkout "tags/v${version}" 2>/dev/null; then
+    return 0
+  fi
 
-#  Extract contents of tar.gz file into the download directory
-tar -xzf "$release_file" -C "$ASDF_DOWNLOAD_PATH" --strip-components=1 || fail "Could not extract $release_file"
+  if git checkout "v${version}" 2>/dev/null; then
+    return 0
+  fi
 
-# Remove the tar.gz file since we don't need to keep it
-rm "$release_file"
+  if git checkout "tags/${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  if git checkout "${version}" 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+main() {
+  local install_type="${ASDF_INSTALL_TYPE:-version}"
+  local version="${ASDF_INSTALL_VERSION:?ASDF_INSTALL_VERSION is required}"
+  local download_path="${ASDF_DOWNLOAD_PATH:?ASDF_DOWNLOAD_PATH is required}"
+  local src_dir="${download_path}/src"
+
+  require_cmd git
+  require_cmd mkdir
+  require_cmd rm
+
+  mkdir -p "$download_path"
+  rm -rf "$src_dir"
+
+  git clone --filter=blob:none "$GIT_REPO" "$src_dir"
+
+  cd "$src_dir"
+  git fetch --tags --force
+
+  case "$install_type" in
+    version)
+      checkout_version "$version" \
+        || fail "unable to find git tag for version: $version"
+      ;;
+    ref)
+      git checkout "$version" || fail "unable to checkout ref: $version"
+      ;;
+    *)
+      fail "unsupported ASDF_INSTALL_TYPE: $install_type"
+      ;;
+  esac
+}
+
+main "$@"

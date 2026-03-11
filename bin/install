@@ -2,8 +2,6 @@
 
 set -euo pipefail
 
-GH_REPO="https://github.com/crowdin/crowdin-cli.git"
-
 fail() {
   echo "asdf-crowdin: $*" >&2
   exit 1
@@ -13,37 +11,15 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
-checkout_version() {
-  local version="$1"
-
-  if git checkout "tags/v${version}" 2>/dev/null; then
-    return 0
-  fi
-
-  if git checkout "v${version}" 2>/dev/null; then
-    return 0
-  fi
-
-  if git checkout "tags/${version}" 2>/dev/null; then
-    return 0
-  fi
-
-  if git checkout "${version}" 2>/dev/null; then
-    return 0
-  fi
-
-  return 1
-}
-
 main() {
-  local install_type="${ASDF_INSTALL_TYPE:-version}"
   local version="${ASDF_INSTALL_VERSION:?ASDF_INSTALL_VERSION is required}"
   local install_path="${ASDF_INSTALL_PATH:?ASDF_INSTALL_PATH is required}"
   local download_path="${ASDF_DOWNLOAD_PATH:?ASDF_DOWNLOAD_PATH is required}"
+  local plugin_path="${ASDF_PLUGIN_PATH:-}"
   local src_dir="${download_path}/src"
   local dist_dir
+  local download_script
 
-  require_cmd git
   require_cmd find
   require_cmd chmod
   require_cmd cp
@@ -53,28 +29,26 @@ main() {
     fail "java is required to build crowdin-cli"
   fi
 
-  mkdir -p "$download_path"
-  rm -rf "$src_dir"
+  if [ ! -d "$src_dir/.git" ]; then
+    if [ -z "$plugin_path" ]; then
+      fail "source not downloaded and ASDF_PLUGIN_PATH is not set"
+    fi
 
-  git clone --filter=blob:none "$GH_REPO" "$src_dir"
+    download_script="${plugin_path}/bin/download"
+
+    if [ ! -x "$download_script" ]; then
+      fail "download script not found or not executable: $download_script"
+    fi
+
+    "$download_script"
+  fi
 
   cd "$src_dir"
-  git fetch --tags --force
 
-  case "$install_type" in
-    version)
-      checkout_version "$version" \
-        || fail "unable to find git tag for version: $version"
-      ;;
-    ref)
-      git checkout "$version" || fail "unable to checkout ref: $version"
-      ;;
-    *)
-      fail "unsupported ASDF_INSTALL_TYPE: $install_type"
-      ;;
-  esac
+  if [ ! -x ./gradlew ]; then
+    chmod +x ./gradlew
+  fi
 
-  chmod +x ./gradlew
   ./gradlew --no-daemon installDist
 
   dist_dir="$(find build/install -mindepth 1 -maxdepth 1 -type d | head -n 1)"
